@@ -40,22 +40,7 @@ static void kolibri_audio_callback(void)
         exit(0);
     }
 
-    GetBufferSize(private->hBuff, &_this->spec.size);
-
-#ifdef DEBUG_AUDIO
-    char *info;
-    SDL_asprintf(&info, "buffer created, size is %d\n", _this->spec.size);
-    _ksys_debug_puts(info);
-    SDL_free(info);
-#endif
-
-    _this->spec.size >>= 1;
-    _this->work_buffer = SDL_malloc(_this->spec.size);
     private->audio_response = 1;
-    if (!_this->work_buffer) {
-        DestroyBuffer(private->hBuff);
-        exit(0);
-    }
 
     // wait for resume
     while (SDL_AtomicGet(&_this->paused))
@@ -94,7 +79,26 @@ static void kolibri_audio_callback(void)
             _ksys_wait_signal(&snd_signal);
             if (snd_signal.id != 0xFF000001)
                 continue;
-            callback(_this->spec.userdata, _this->work_buffer, _this->spec.size);
+
+            if (!_this->stream) { /* no conversion necessary. */
+                callback(_this->callbackspec.userdata, _this->work_buffer, _this->spec.size);
+            } else { /* streaming/converting */
+                const int stream_len = _this->callbackspec.size;
+                const int ilen = (int)_this->spec.size;
+
+                callback(_this->callbackspec.userdata, _this->work_buffer, stream_len);
+                if (SDL_AudioStreamPut(_this->stream, _this->work_buffer, stream_len) == -1) {
+                    SDL_AudioStreamClear(_this->stream);
+                    SDL_AtomicSet(&_this->enabled, 0);
+                    break;
+                }
+
+                const int got = SDL_AudioStreamGet(_this->stream, _this->work_buffer, ilen);
+                SDL_assert((got < 0) || (got == ilen));
+                if (got != ilen) {
+                    SDL_memset(_this->work_buffer, _this->spec.silence, _this->spec.size);
+                }
+            }
             SetBuffer(private->hBuff, _this->work_buffer, ((int *)snd_signal.data)[2], _this->spec.size);
         }
     }
@@ -116,6 +120,7 @@ static void KOLIBRIAUDIO_CloseDevice(SDL_AudioDevice *device)
 static int KOLIBRIAUDIO_OpenDevice(_THIS, const char *devname)
 {
     int ver;
+    SDL_AudioFormat test_format;
 
     if (InitSound(&ver)) {
         SDL_SetError("Error: cannot load drivers!\n");
@@ -127,57 +132,12 @@ static int KOLIBRIAUDIO_OpenDevice(_THIS, const char *devname)
         return SDL_OutOfMemory();
     }
 
-    switch (_this->spec.freq) {
+    private->used_format = PCM_2_16_48;
 
-#define HANDLE_FREQ(freq, symb)                  \
-    case freq:                                   \
-        switch (_this->spec.channels) {          \
-        case 1:                                  \
-            switch (_this->spec.format) {        \
-            case AUDIO_U8:                       \
-            case AUDIO_S8:                       \
-                private                          \
-                ->used_format = PCM_1_8_##symb;  \
-                break;                           \
-            case AUDIO_U16SYS:                   \
-            case AUDIO_S16SYS:                   \
-                private                          \
-                ->used_format = PCM_1_16_##symb; \
-                break;                           \
-            }                                    \
-            break;                               \
-        case 2:                                  \
-            switch (_this->spec.format) {        \
-            case AUDIO_U8:                       \
-            case AUDIO_S8:                       \
-                private                          \
-                ->used_format = PCM_2_8_##symb;  \
-                break;                           \
-            case AUDIO_U16SYS:                   \
-            case AUDIO_S16SYS:                   \
-                private                          \
-                ->used_format = PCM_2_16_##symb; \
-                break;                           \
-            }                                    \
-            break;                               \
-        }                                        \
-        break;
-
-        HANDLE_FREQ(48000, 48);
-        HANDLE_FREQ(44100, 44);
-        HANDLE_FREQ(32000, 32);
-        HANDLE_FREQ(24000, 24);
-        HANDLE_FREQ(22050, 22);
-        HANDLE_FREQ(16000, 16);
-        HANDLE_FREQ(12000, 12);
-        HANDLE_FREQ(11025, 11);
-        HANDLE_FREQ(8000, 8);
-    }
-
-    if (!private->used_format) {
-        SDL_SetError("Unknown audio format");
-        return -1;
-    }
+    _this->spec.freq = 48000;
+    _this->spec.format = AUDIO_S16SYS;
+    _this->spec.channels = 2;
+    SDL_CalculateAudioSpec(&_this->spec);
 
     _ksys_thread_info(&thread_info, KSYS_THIS_SLOT);
     main_tid = thread_info.pid;
@@ -202,22 +162,11 @@ static int KOLIBRIAUDIO_OpenDevice(_THIS, const char *devname)
         SDL_SetError("Cannot create audio buffer");
         return -1;
     }
-    if (!_this->work_buffer) {
-        SDL_SetError("Cannot allocate audio buffer");
-        return -1;
-    }
 
-    _this->spec.silence = (_this->spec.format == AUDIO_U8 ? 0x80 : 0);
-    _this->spec.samples = _this->spec.size / _this->spec.channels;
-    if (_this->spec.format == AUDIO_U16SYS || _this->spec.format == AUDIO_S16SYS)
-        _this->spec.samples /= 2;
-
-#ifdef DEBUG_AUDIO
     char *info;
     SDL_asprintf(&info, "obtained size is %d, samples %d\n", _this->spec.size, _this->spec.samples);
     _ksys_debug_puts(info);
     SDL_free(info);
-#endif
     return 0;
 }
 
