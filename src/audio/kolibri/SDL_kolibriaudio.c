@@ -33,13 +33,11 @@ static void kolibri_audio_callback(void)
 
     // initialize
     _this = global_device;
-    callback = _this->spec.callback;
 
     if (CreateBuffer(private->used_format | PCM_RING, 0, &private->hBuff)) {
         private->audio_response = 1;
         exit(0);
     }
-
     private->audio_response = 1;
 
     // wait for resume
@@ -50,6 +48,7 @@ static void kolibri_audio_callback(void)
     bPaused = 0;
     private->audio_response = 1;
     PlayBuffer(private->hBuff, 0);
+    callback = _this->callbackspec.callback;
 
     // main loop
     while (1) {
