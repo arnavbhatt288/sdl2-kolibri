@@ -134,7 +134,7 @@ static int KOLIBRIAUDIO_OpenDevice(_THIS, const char *devname)
     private->used_format = PCM_2_16_48;
 
     _this->spec.freq = 48000;
-    _this->spec.format = AUDIO_S16SYS;
+    _this->spec.format = AUDIO_S16LSB;
     _this->spec.channels = 2;
     SDL_CalculateAudioSpec(&_this->spec);
 
