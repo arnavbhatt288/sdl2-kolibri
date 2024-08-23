@@ -22,21 +22,24 @@
 
 #ifdef SDL_AUDIO_DRIVER_EMSCRIPTEN
 
-#include "SDL_audio.h"
 #include "../SDL_audio_c.h"
+#include "SDL_audio.h"
 #include "SDL_emscriptenaudio.h"
 
 #include <emscripten/emscripten.h>
 
-/* !!! FIXME: this currently expects that the audio callback runs in the main thread,
-   !!! FIXME:  in intervals when the application isn't running, but that may not be
-   !!! FIXME:  true always once pthread support becomes widespread. Revisit this code
+/* !!! FIXME: this currently expects that the audio callback runs in the main
+   thread,
+   !!! FIXME:  in intervals when the application isn't running, but that may not
+   be
+   !!! FIXME:  true always once pthread support becomes widespread. Revisit this
+   code
    !!! FIXME:  at some point and see what needs to be done for that! */
 
-static void FeedAudioDevice(_THIS, const void *buf, const int buflen)
-{
-    const int framelen = (SDL_AUDIO_BITSIZE(this->spec.format) / 8) * this->spec.channels;
-    /* *INDENT-OFF* */ /* clang-format off */
+static void FeedAudioDevice(_THIS, const void *buf, const int buflen) {
+  const int framelen =
+      (SDL_AUDIO_BITSIZE(this->spec.format) / 8) * this->spec.channels;
+  /* *INDENT-OFF* */ /* clang-format off */
     MAIN_THREAD_EM_ASM({
         var SDL2 = Module['SDL2'];
         var numChannels = SDL2.audio.currentOutputBuffer['numberOfChannels'];
@@ -54,58 +57,57 @@ static void FeedAudioDevice(_THIS, const void *buf, const int buflen)
 /* *INDENT-ON* */ /* clang-format on */
 }
 
-static void HandleAudioProcess(_THIS)
-{
-    SDL_AudioCallback callback = this->callbackspec.callback;
-    const int stream_len = this->callbackspec.size;
+static void HandleAudioProcess(_THIS) {
+  SDL_AudioCallback callback = this->spec.callback;
+  const int stream_len = this->callbackspec.size;
 
-    /* Only do something if audio is enabled */
-    if (!SDL_AtomicGet(&this->enabled) || SDL_AtomicGet(&this->paused)) {
-        if (this->stream) {
-            SDL_AudioStreamClear(this->stream);
-        }
-
-        SDL_memset(this->work_buffer, this->spec.silence, this->spec.size);
-        FeedAudioDevice(this, this->work_buffer, this->spec.size);
-        return;
+  /* Only do something if audio is enabled */
+  if (!SDL_AtomicGet(&this->enabled) || SDL_AtomicGet(&this->paused)) {
+    if (this->stream) {
+      SDL_AudioStreamClear(this->stream);
     }
 
-    if (!this->stream) { /* no conversion necessary. */
-        SDL_assert(this->spec.size == stream_len);
-        callback(this->callbackspec.userdata, this->work_buffer, stream_len);
-    } else { /* streaming/converting */
-        int got;
-        while (SDL_AudioStreamAvailable(this->stream) < ((int)this->spec.size)) {
-            callback(this->callbackspec.userdata, this->work_buffer, stream_len);
-            if (SDL_AudioStreamPut(this->stream, this->work_buffer, stream_len) == -1) {
-                SDL_AudioStreamClear(this->stream);
-                SDL_AtomicSet(&this->enabled, 0);
-                break;
-            }
-        }
-
-        got = SDL_AudioStreamGet(this->stream, this->work_buffer, this->spec.size);
-        SDL_assert((got < 0) || (got == this->spec.size));
-        if (got != this->spec.size) {
-            SDL_memset(this->work_buffer, this->spec.silence, this->spec.size);
-        }
-    }
-
+    SDL_memset(this->work_buffer, this->spec.silence, this->spec.size);
     FeedAudioDevice(this, this->work_buffer, this->spec.size);
+    return;
+  }
+
+  if (!this->stream) { /* no conversion necessary. */
+    SDL_assert(this->spec.size == stream_len);
+    callback(this->callbackspec.userdata, this->work_buffer, stream_len);
+  } else { /* streaming/converting */
+    int got;
+    while (SDL_AudioStreamAvailable(this->stream) < ((int)this->spec.size)) {
+      callback(this->callbackspec.userdata, this->work_buffer, stream_len);
+      if (SDL_AudioStreamPut(this->stream, this->work_buffer, stream_len) ==
+          -1) {
+        SDL_AudioStreamClear(this->stream);
+        SDL_AtomicSet(&this->enabled, 0);
+        break;
+      }
+    }
+
+    got = SDL_AudioStreamGet(this->stream, this->work_buffer, this->spec.size);
+    SDL_assert((got < 0) || (got == this->spec.size));
+    if (got != this->spec.size) {
+      SDL_memset(this->work_buffer, this->spec.silence, this->spec.size);
+    }
+  }
+
+  FeedAudioDevice(this, this->work_buffer, this->spec.size);
 }
 
-static void HandleCaptureProcess(_THIS)
-{
-    SDL_AudioCallback callback = this->callbackspec.callback;
-    const int stream_len = this->callbackspec.size;
+static void HandleCaptureProcess(_THIS) {
+  SDL_AudioCallback callback = this->callbackspec.callback;
+  const int stream_len = this->callbackspec.size;
 
-    /* Only do something if audio is enabled */
-    if (!SDL_AtomicGet(&this->enabled) || SDL_AtomicGet(&this->paused)) {
-        SDL_AudioStreamClear(this->stream);
-        return;
-    }
+  /* Only do something if audio is enabled */
+  if (!SDL_AtomicGet(&this->enabled) || SDL_AtomicGet(&this->paused)) {
+    SDL_AudioStreamClear(this->stream);
+    return;
+  }
 
-    /* *INDENT-OFF* */ /* clang-format off */
+  /* *INDENT-OFF* */ /* clang-format off */
     MAIN_THREAD_EM_ASM({
         var SDL2 = Module['SDL2'];
         var numChannels = SDL2.capture.currentCaptureBuffer.numberOfChannels;
@@ -128,30 +130,32 @@ static void HandleCaptureProcess(_THIS)
     }, this->work_buffer, (this->spec.size / sizeof(float)) / this->spec.channels);
 /* *INDENT-ON* */ /* clang-format on */
 
-    /* okay, we've got an interleaved float32 array in C now. */
+  /* okay, we've got an interleaved float32 array in C now. */
 
-    if (!this->stream) { /* no conversion necessary. */
-        SDL_assert(this->spec.size == stream_len);
-        callback(this->callbackspec.userdata, this->work_buffer, stream_len);
-    } else { /* streaming/converting */
-        if (SDL_AudioStreamPut(this->stream, this->work_buffer, this->spec.size) == -1) {
-            SDL_AtomicSet(&this->enabled, 0);
-        }
-
-        while (SDL_AudioStreamAvailable(this->stream) >= stream_len) {
-            const int got = SDL_AudioStreamGet(this->stream, this->work_buffer, stream_len);
-            SDL_assert((got < 0) || (got == stream_len));
-            if (got != stream_len) {
-                SDL_memset(this->work_buffer, this->callbackspec.silence, stream_len);
-            }
-            callback(this->callbackspec.userdata, this->work_buffer, stream_len); /* Send it to the app. */
-        }
+  if (!this->stream) { /* no conversion necessary. */
+    SDL_assert(this->spec.size == stream_len);
+    callback(this->callbackspec.userdata, this->work_buffer, stream_len);
+  } else { /* streaming/converting */
+    if (SDL_AudioStreamPut(this->stream, this->work_buffer, this->spec.size) ==
+        -1) {
+      SDL_AtomicSet(&this->enabled, 0);
     }
+
+    while (SDL_AudioStreamAvailable(this->stream) >= stream_len) {
+      const int got =
+          SDL_AudioStreamGet(this->stream, this->work_buffer, stream_len);
+      SDL_assert((got < 0) || (got == stream_len));
+      if (got != stream_len) {
+        SDL_memset(this->work_buffer, this->callbackspec.silence, stream_len);
+      }
+      callback(this->callbackspec.userdata, this->work_buffer,
+               stream_len); /* Send it to the app. */
+    }
+  }
 }
 
-static void EMSCRIPTENAUDIO_CloseDevice(_THIS)
-{
-    /* *INDENT-OFF* */ /* clang-format off */
+static void EMSCRIPTENAUDIO_CloseDevice(_THIS) {
+  /* *INDENT-OFF* */ /* clang-format off */
     MAIN_THREAD_EM_ASM({
         var SDL2 = Module['SDL2'];
         if ($0) {
@@ -188,22 +192,22 @@ static void EMSCRIPTENAUDIO_CloseDevice(_THIS)
     }, this->iscapture);
 /* *INDENT-ON* */ /* clang-format on */
 
-#if 0  /* !!! FIXME: currently not used. Can we move some stuff off the SDL2 namespace? --ryan. */
+#if 0 /* !!! FIXME: currently not used. Can we move some stuff off the SDL2    \
+         namespace? --ryan. */
     SDL_free(this->hidden);
 #endif
 }
 
 EM_JS_DEPS(sdlaudio, "$autoResumeAudioContext,$dynCall");
 
-static int EMSCRIPTENAUDIO_OpenDevice(_THIS, const char *devname)
-{
-    SDL_AudioFormat test_format;
-    SDL_bool iscapture = this->iscapture;
-    int result;
+static int EMSCRIPTENAUDIO_OpenDevice(_THIS, const char *devname) {
+  SDL_AudioFormat test_format;
+  SDL_bool iscapture = this->iscapture;
+  int result;
 
-    /* based on parts of library_sdl.js */
+  /* based on parts of library_sdl.js */
 
-    /* *INDENT-OFF* */ /* clang-format off */
+  /* *INDENT-OFF* */ /* clang-format off */
     /* create context */
     result = MAIN_THREAD_EM_ASM_INT({
         if(typeof(Module['SDL2']) === 'undefined') {
@@ -232,28 +236,30 @@ static int EMSCRIPTENAUDIO_OpenDevice(_THIS, const char *devname)
     }, iscapture);
 /* *INDENT-ON* */ /* clang-format on */
 
-    if (result < 0) {
-        return SDL_SetError("Web Audio API is not available!");
-    }
+  if (result < 0) {
+    return SDL_SetError("Web Audio API is not available!");
+  }
 
-    for (test_format = SDL_FirstAudioFormat(this->spec.format); test_format; test_format = SDL_NextAudioFormat()) {
-        switch (test_format) {
-        case AUDIO_F32: /* web audio only supports floats */
-            break;
-        default:
-            continue;
-        }
-        break;
+  for (test_format = SDL_FirstAudioFormat(this->spec.format); test_format;
+       test_format = SDL_NextAudioFormat()) {
+    switch (test_format) {
+    case AUDIO_F32: /* web audio only supports floats */
+      break;
+    default:
+      continue;
     }
+    break;
+  }
 
-    if (!test_format) {
-        /* Didn't find a compatible format :( */
-        return SDL_SetError("%s: Unsupported audio format", "emscripten");
-    }
-    this->spec.format = test_format;
+  if (!test_format) {
+    /* Didn't find a compatible format :( */
+    return SDL_SetError("%s: Unsupported audio format", "emscripten");
+  }
+  this->spec.format = test_format;
 
-    /* Initialize all variables that we clean on shutdown */
-#if 0  /* !!! FIXME: currently not used. Can we move some stuff off the SDL2 namespace? --ryan. */
+  /* Initialize all variables that we clean on shutdown */
+#if 0 /* !!! FIXME: currently not used. Can we move some stuff off the SDL2    \
+         namespace? --ryan. */
     this->hidden = (struct SDL_PrivateAudioData *)
         SDL_malloc(sizeof(*this->hidden));
     if (this->hidden == NULL) {
@@ -261,17 +267,17 @@ static int EMSCRIPTENAUDIO_OpenDevice(_THIS, const char *devname)
     }
     SDL_zerop(this->hidden);
 #endif
-    this->hidden = (struct SDL_PrivateAudioData *)0x1;
+  this->hidden = (struct SDL_PrivateAudioData *)0x1;
 
-    /* limit to native freq */
-    this->spec.freq = EM_ASM_INT({
-      var SDL2 = Module['SDL2'];
-      return SDL2.audioContext.sampleRate;
-    });
+  /* limit to native freq */
+  this->spec.freq = EM_ASM_INT({
+    var SDL2 = Module['SDL2'];
+    return SDL2.audioContext.sampleRate;
+  });
 
-    SDL_CalculateAudioSpec(&this->spec);
+  SDL_CalculateAudioSpec(&this->spec);
 
-    /* *INDENT-OFF* */ /* clang-format off */
+  /* *INDENT-OFF* */ /* clang-format off */
     if (iscapture) {
         /* The idea is to take the capture media stream, hook it up to an
            audio graph where we can pass it through a ScriptProcessorNode
@@ -373,28 +379,27 @@ static int EMSCRIPTENAUDIO_OpenDevice(_THIS, const char *devname)
     }
 /* *INDENT-ON* */ /* clang-format on */
 
-    return 0;
+  return 0;
 }
 
-static void EMSCRIPTENAUDIO_LockOrUnlockDeviceWithNoMixerLock(SDL_AudioDevice *device)
-{
-}
+static void
+EMSCRIPTENAUDIO_LockOrUnlockDeviceWithNoMixerLock(SDL_AudioDevice *device) {}
 
-static SDL_bool EMSCRIPTENAUDIO_Init(SDL_AudioDriverImpl *impl)
-{
-    SDL_bool available, capture_available;
+static SDL_bool EMSCRIPTENAUDIO_Init(SDL_AudioDriverImpl *impl) {
+  SDL_bool available, capture_available;
 
-    /* Set the function pointers */
-    impl->OpenDevice = EMSCRIPTENAUDIO_OpenDevice;
-    impl->CloseDevice = EMSCRIPTENAUDIO_CloseDevice;
+  /* Set the function pointers */
+  impl->OpenDevice = EMSCRIPTENAUDIO_OpenDevice;
+  impl->CloseDevice = EMSCRIPTENAUDIO_CloseDevice;
 
-    impl->OnlyHasDefaultOutputDevice = SDL_TRUE;
+  impl->OnlyHasDefaultOutputDevice = SDL_TRUE;
 
-    /* no threads here */
-    impl->LockDevice = impl->UnlockDevice = EMSCRIPTENAUDIO_LockOrUnlockDeviceWithNoMixerLock;
-    impl->ProvidesOwnCallbackThread = SDL_TRUE;
+  /* no threads here */
+  impl->LockDevice = impl->UnlockDevice =
+      EMSCRIPTENAUDIO_LockOrUnlockDeviceWithNoMixerLock;
+  impl->ProvidesOwnCallbackThread = SDL_TRUE;
 
-    /* *INDENT-OFF* */ /* clang-format off */
+  /* *INDENT-OFF* */ /* clang-format off */
     /* check availability */
     available = MAIN_THREAD_EM_ASM_INT({
         if (typeof(AudioContext) !== 'undefined') {
@@ -406,11 +411,11 @@ static SDL_bool EMSCRIPTENAUDIO_Init(SDL_AudioDriverImpl *impl)
     });
 /* *INDENT-ON* */ /* clang-format on */
 
-    if (!available) {
-        SDL_SetError("No audio context available");
-    }
+  if (!available) {
+    SDL_SetError("No audio context available");
+  }
 
-    /* *INDENT-OFF* */ /* clang-format off */
+  /* *INDENT-OFF* */ /* clang-format off */
     capture_available = available && MAIN_THREAD_EM_ASM_INT({
         if ((typeof(navigator.mediaDevices) !== 'undefined') && (typeof(navigator.mediaDevices.getUserMedia) !== 'undefined')) {
             return true;
@@ -421,15 +426,15 @@ static SDL_bool EMSCRIPTENAUDIO_Init(SDL_AudioDriverImpl *impl)
     });
 /* *INDENT-ON* */ /* clang-format on */
 
-    impl->HasCaptureSupport = capture_available ? SDL_TRUE : SDL_FALSE;
-    impl->OnlyHasDefaultCaptureDevice = capture_available ? SDL_TRUE : SDL_FALSE;
+  impl->HasCaptureSupport = capture_available ? SDL_TRUE : SDL_FALSE;
+  impl->OnlyHasDefaultCaptureDevice = capture_available ? SDL_TRUE : SDL_FALSE;
 
-    return available;
+  return available;
 }
 
-AudioBootStrap EMSCRIPTENAUDIO_bootstrap = {
-    "emscripten", "SDL emscripten audio driver", EMSCRIPTENAUDIO_Init, SDL_FALSE
-};
+AudioBootStrap EMSCRIPTENAUDIO_bootstrap = {"emscripten",
+                                            "SDL emscripten audio driver",
+                                            EMSCRIPTENAUDIO_Init, SDL_FALSE};
 
 #endif /* SDL_AUDIO_DRIVER_EMSCRIPTEN */
 
